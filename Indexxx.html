@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>UNDERTALE - Amber Mobile</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-family: monospace;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        canvas {
+            border: 2px solid #fff;
+            background-color: #000;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            max-width: 95vw;
+            max-height: 50vh;
+        }
+
+        #touch-controls {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+            width: 280px;
+        }
+
+        .btn {
+            background: #222;
+            color: #fff;
+            border: 2px solid #fff;
+            padding: 15px;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            border-radius: 8px;
+            touch-action: manipulation;
+        }
+
+        .btn:active {
+            background: #ff0;
+            color: #000;
+        }
+
+        .btn-z {
+            grid-column: span 3;
+            background: #b22222;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="640" height="480"></canvas>
+
+    <div id="touch-controls">
+        <div></div>
+        <div class="btn" id="btn-up">▲</div>
+        <div></div>
+        <div class="btn" id="btn-left">◄</div>
+        <div class="btn" id="btn-down">▼</div>
+        <div class="btn" id="btn-right">►</div>
+        <div class="btn btn-z" id="btn-action">BOUTON Z (OK)</div>
+    </div>
+
+<script>
+/** @type {HTMLCanvasElement} */
+const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('gameCanvas'));
+const ctx = canvas.getContext('2d');
+
+if (ctx) {
+    ctx.imageSmoothingEnabled = false;
+}
+
+const images = {};
+const imgSources = {
+    // Sprites d'Amber
+    amberIdle: 'amber_idle.png',
+    amberCombat: 'amber_combat.png',
+    amberParazyte: 'amber_parazyte.png',
+    amberPeace: 'amber_peace.png',
+    amberAngry: 'amber_angry.png',
+    amberHappy: 'amber_happy.png',
+    amberStand: 'amber_stand.png',
+    // Autres éléments
+    soul: 'red_soul.png',
+    dagger: 'black_dagger.png',
+    btnFight: 'fight_button.jpg',
+    btnAct: 'act_button.jpg',
+    btnItem: 'item_button.jpg',
+    btnMercy: 'mercy_button.jpg'
+};
+
+let loadedCount = 0;
+const totalImages = Object.keys(imgSources).length;
+
+for (let key in imgSources) {
+    images[key] = new Image();
+    images[key].src = imgSources[key];
+    images[key].onload = () => {
+        loadedCount++;
+        if (loadedCount === totalImages) {
+            initGame();
+        }
+    };
+}
+
+const STATES = {
+    INTRO: 0,
+    MENU: 1,
+    ATTACK_ANIM: 2,
+    DIALOGUE: 3,
+    BULLET_HELL: 4,
+    DEATH: 5,
+    PARAZYTE: 6
+};
+
+let currentState = STATES.INTRO;
+let currentBtnIndex = 0;
+let turnCounter = 0;
+let amberHP = 3;
+let playerHP = 76;
+let maxPlayerHP = 76;
+
+let soulPos = { x: 320, y: 315 };
+let daggers = [];
+let animTime = 0;
+let dodgeOffsetX = 0;
+let stateTimer = 0;
+let deathTimer = 60;
+
+let playerAttackDaggerX = 100;
+let currentExpression = 'amberStand';
+
+let fullDialogue = "* Amber se dresse sur votre chemin.\n* Elle refuse de vous laisser passer.";
+let displayedText = "";
+let charIndex = 0;
+
+const keys = { Up: false, Down: false, Left: false, Right: false, Action: false };
+
+function setupInputs() {
+    window.addEventListener('keydown', e => {
+        if (e.key === 'ArrowLeft') keys.Left = true;
+        if (e.key === 'ArrowRight') keys.Right = true;
+        if (e.key === 'ArrowUp') keys.Up = true;
+        if (e.key === 'ArrowDown') keys.Down = true;
+        if (e.key === 'z' || e.key === 'Enter') handleActionKey();
+    });
+
+    window.addEventListener('keyup', e => {
+        if (e.key === 'ArrowLeft') keys.Left = false;
+        if (e.key === 'ArrowRight') keys.Right = false;
+        if (e.key === 'ArrowUp') keys.Up = false;
+        if (e.key === 'ArrowDown') keys.Down = false;
+    });
+
+    /**
+     * @param {string} id
+     * @param {string} keyName
+     */
+    const bindTouch = (id, keyName) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[keyName] = true; });
+            el.addEventListener('touchend', (e) => { e.preventDefault(); keys[keyName] = false; });
+        }
+    };
+
+    bindTouch('btn-left', 'Left');
+    bindTouch('btn-right', 'Right');
+    bindTouch('btn-up', 'Up');
+    bindTouch('btn-down', 'Down');
+
+    const btnAction = document.getElementById('btn-action');
+    if (btnAction) {
+        btnAction.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleActionKey();
+        });
+    }
+}
+
+function handleActionKey() {
+    if (currentState === STATES.MENU) {
+        if (currentBtnIndex === 0) { // FIGHT
+            turnCounter++;
+            currentState = STATES.ATTACK_ANIM;
+            stateTimer = 0;
+            playerAttackDaggerX = 100;
+            currentExpression = 'amberAngry';
+        } else if (currentBtnIndex === 1) { // ACT
+            currentExpression = 'amberHappy';
+            startDialogue("* Vous discutez avec Amber.\n* Elle semble détendue.");
+        } else if (currentBtnIndex === 3) { // MERCY
+            currentExpression = 'amberPeace';
+            startDialogue("* Amber vous fait un signe.\n* \"Pas de combat nécessaire !\"");
+        }
+    } else if (currentState === STATES.INTRO || currentState === STATES.DIALOGUE) {
+        if (charIndex < fullDialogue.length) {
+            displayedText = fullDialogue;
+            charIndex = fullDialogue.length;
+        } else {
+            if (currentState === STATES.INTRO) {
+                currentState = STATES.MENU;
+                currentExpression = 'amberStand';
+            } else {
+                currentState = STATES.BULLET_HELL;
+                currentExpression = 'amberCombat';
+                stateTimer = 7;
+                daggers = [];
+                soulPos = { x: 320, y: 315 };
+            }
+        }
+    }
+}
+
+/**
+ * @param {string} text
+ */
+function startDialogue(text) {
+    fullDialogue = text;
+    displayedText = "";
+    charIndex = 0;
+    currentState = STATES.DIALOGUE;
+}
+
+let lastTime = performance.now();
+
+function initGame() {
+    setupInputs();
+    requestAnimationFrame(gameLoop);
+}
+
+/**
+ * @param {number} now
+ */
+function gameLoop(now) {
+    let dt = (now - lastTime) / 1000;
+    lastTime = now;
+    animTime += dt;
+
+    update(dt);
+    render();
+
+    requestAnimationFrame(gameLoop);
+}
+
+/**
+ * @param {number} dt
+ */
+function update(dt) {
+    if (currentState === STATES.MENU) {
+        if (keys.Left) { currentBtnIndex = (currentBtnIndex + 3) % 4; keys.Left = false; }
+        if (keys.Right) { currentBtnIndex = (currentBtnIndex + 1) % 4; keys.Right = false; }
+    }
+
+    if (currentState === STATES.INTRO || currentState === STATES.DIALOGUE) {
+        if (charIndex < fullDialogue.length) {
+            displayedText += fullDialogue[charIndex];
+            charIndex++;
+        }
+    }
+
+    if (currentState === STATES.ATTACK_ANIM) {
+        stateTimer += dt;
+        playerAttackDaggerX += 500 * dt;
+
+        if (turnCounter % 7 === 0) {
+            dodgeOffsetX = 0;
+            if (stateTimer >= 0.8) {
+                amberHP--;
+                if (amberHP <= 0) {
+                    currentState = STATES.DEATH;
+                    currentExpression = 'amberIdle';
+                    deathTimer = 60;
+                } else {
+                    startDialogue("* COUP DIRECT !\n* Amber vacille sous le choc.");
+                }
+            }
+        } else {
+            if (stateTimer < 0.4) dodgeOffsetX = (stateTimer / 0.4) * 90;
+            else if (stateTimer < 0.8) dodgeOffsetX = 90 - ((stateTimer - 0.4) / 0.4) * 90;
+            else {
+                dodgeOffsetX = 0;
+                startDialogue("* RATÉ !\n* Amber a esquivé sans effort.");
+            }
+        }
+    }
+
+    if (currentState === STATES.BULLET_HELL) {
+        stateTimer -= dt;
+        let speed = 180 * dt;
+
+        if (keys.Left && soulPos.x > 105) soulPos.x -= speed;
+        if (keys.Right && soulPos.x < 535) soulPos.x += speed;
+        if (keys.Up && soulPos.y > 265) soulPos.y -= speed;
+        if (keys.Down && soulPos.y < 365) soulPos.y += speed;
+
+        if (Math.random() < 0.08) {
+            let fromLeft = Math.random() < 0.5;
+            daggers.push({
+                x: fromLeft ? 90 : 550,
+                baseY: 270 + Math.random() * 80,
+                vx: fromLeft ? 150 : -150,
+                offset: Math.random() * 100
+            });
+        }
+
+        for (let i = daggers.length - 1; i >= 0; i--) {
+            let d = daggers[i];
+            d.x += d.vx * dt;
+            let currentY = d.baseY + Math.sin(animTime * 6 + d.offset) * 20;
+
+            if (Math.abs(d.x - soulPos.x) < 12 && Math.abs(currentY - soulPos.y) < 12) {
+                playerHP = Math.max(0, playerHP - 4);
+                daggers.splice(i, 1);
+            } else if (d.x < 80 || d.x > 560) {
+                daggers.splice(i, 1);
+            }
+        }
+
+        if (stateTimer <= 0) {
+            currentState = STATES.MENU;
+            currentExpression = 'amberStand';
+        }
+    }
+
+    if (currentState === STATES.DEATH) {
+        deathTimer -= dt;
+        if (deathTimer <= 0) {
+            currentState = STATES.PARAZYTE;
+            currentExpression = 'amberParazyte';
+        }
+    }
+}
+
+function render() {
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    let floatY = Math.sin(animTime * 2.5) * 4;
+    
+    let currentSprite = images[currentExpression] || images.amberStand;
+
+    ctx.drawImage(currentSprite, 270 + dodgeOffsetX, 40 + floatY, 100, 150);
+
+    // Boîte de combat
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(90, 250, 460, 130);
+
+    if (currentState === STATES.ATTACK_ANIM && playerAttackDaggerX < 320) {
+        ctx.drawImage(images.dagger, playerAttackDaggerX, 100, 30, 30);
+    }
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "16px monospace";
+
+    if (currentState === STATES.INTRO || currentState === STATES.DIALOGUE) {
+        let lines = displayedText.split('\n');
+        lines.forEach((line, index) => {
+            ctx.fillText(line, 110, 280 + (index * 25));
+        });
+    } else if (currentState === STATES.DEATH) {
+        ctx.fillText("* Amber s'effondre...", 110, 280);
+        ctx.fillStyle = "#f00";
+        ctx.fillText("Temps restant : " + Math.ceil(deathTimer) + "s", 110, 310);
+    } else if (currentState === STATES.PARAZYTE) {
+        ctx.fillText("* FLOWEY A PRIS LE CONTRÔLE DU CORPS !", 110, 280);
+    }
+
+    if (currentState === STATES.BULLET_HELL) {
+        ctx.drawImage(images.soul, soulPos.x - 10, soulPos.y - 10, 20, 20);
+
+        daggers.forEach(d => {
+            let currentY = d.baseY + Math.sin(animTime * 6 + d.offset) * 20;
+            ctx.drawImage(images.dagger, d.x - 10, currentY - 10, 20, 20);
+        });
+    }
+
+    const btns = [images.btnFight, images.btnAct, images.btnItem, images.btnMercy];
+    btns.forEach((img, index) => {
+        let x = 32 + (index * 153);
+        ctx.drawImage(img, x, 430, 110, 42);
+        if (index === currentBtnIndex && currentState === STATES.MENU) {
+            ctx.strokeStyle = "#ff0";
+            ctx.strokeRect(x, 430, 110, 42);
+        }
+    });
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "14px monospace";
+    ctx.fillText("CHARA   LV 16   HP", 90, 410);
+
+    ctx.fillStyle = "#f00";
+    ctx.fillRect(275, 398, 120, 14);
+    ctx.fillStyle = "#ff0";
+    ctx.fillRect(275, 398, (playerHP / maxPlayerHP) * 120, 14);
+}
+</script>
+</body>
+</html>
